@@ -103,38 +103,10 @@ BGP·BFD·prepend라는 30년간 검증된 프로토콜 동작으로 대체됩�
 대기 라우터에 자동으로 다시 붙습니다. 온프레미스(CGW)는 터널 목적지가 그대로라
 **아무것도 바꿀 필요가 없습니다**.
 
-```
-멀티캐스트 서버 172.20.51.x
-  │ Gi4 (PIM)
-  ▼
-CGW (ASN 65000, Lo0 172.20.255.1 = GRE 소스 + PIM RP)
-  │
-  │ DX Transit VIF ×2 ── 언더레이 BGP 65000↔65300 + BFD, Lo0만 광고
-  ▼
-DXGW (ASN 65300)
-  │
-  ▼
-TGW (ASN 65400) ── attachment: tgw-sub-az1/2 (전용)
-  │                멀티캐스트 도메인(IGMPv2): receiver-sub 연결
-  ▼
-VPC 10.1.1.0/24
-  ├─ [tgw-sub .224/27]
-  │    tgw-rtb: 10.255.255.1/32 → 활성 라우터 Gi1 (Route Server가 주입)
-  │
-  ├─ [router-sub .0/26]
-  │    C8000V-1 Gi1 .30 ↔ RS 엔드포인트 .29 (prepend 없음 → 활성)
-  │    C8000V-2 Gi1 .40 ↔ RS 엔드포인트 .41 (prepend ×3 → 대기)
-  │    두 대가 GRE Tunnel100 종단 (공유 애니캐스트 Lo0 10.255.255.1, 오버레이 172.16.100.2)
-  │    오버레이 eBGP(65000↔65200) + PIM ↔ CGW, LAN 172.20.51.0/24 학습 → RS에 재광고
-  │    Route Server(ASN 65100)가 BGP+BFD로 활성 라우터의 Gi1 ENI 경로 주입/전환
-  │
-  └─ [receiver-sub .64/26]
-       C8000V Gi2 .90/.100 (igmp static-group) → TGW 멀티캐스트 도메인으로 송출
-       도메인이 IGMPv2 조인 멤버에게 복제 → Receiver-1 (az1), Receiver-2 (az2)
+![아키텍처 개요: 온프레미스 CGW에서 Direct Connect, DXGW, TGW를 거쳐 활성 C8000V로 GRE 터널이 종단되고, TGW 멀티캐스트 도메인이 두 AZ의 리시버로 복제](docs/architecture-overview.svg)
 
-데이터 경로: 서버 → CGW(RP) → GRE → 활성 C8000V → Gi2 → TGW 도메인 → Receiver ×2
-페일오버:    RS가 BFD 감지 → tgw-rtb/receiver-rtb 넥스트홉 교체 → CGW 무변경 재앵커
-```
+- **데이터 경로**: 서버 → CGW(RP) → GRE(DX 언더레이) → 활성 C8000V → Gi2 → TGW 도메인 → Receiver ×2
+- **페일오버**: RS가 BFD로 감지 → tgw-rtb/receiver-rtb 넥스트홉 교체 → CGW 무변경 재앵커
 
 ---
 
@@ -157,14 +129,7 @@ VPC 10.1.1.0/24
 
 **② GRE 캡슐 패킷의 실제 경로** (온프렘 → AWS 방향):
 
-```
-CGW: 원본 패킷을 GRE로 캡슐 (outer src 172.20.255.1, dst 10.255.255.1)
- → DX Transit VIF → DXGW
- → TGW (정적 경로 10.255.255.1/32 → VPC attachment)
- → tgw-sub의 어태치먼트 ENI 도착
- → tgw-rtb 조회: 10.255.255.1/32 → [활성 C8000V Gi1 ENI]   ← Route Server가 주입/전환
- → 활성 C8000V가 수신, GRE 캡슐 해제
-```
+![GRE 캡슐 패킷 경로: CGW → Direct Connect → DXGW → TGW(정적 /32 → VPC attachment) → attachment ENI → tgw-rtb(RS 주입 /32 → 활성 C8000V Gi1 ENI) → C8000V-1](docs/gre-packet-path.svg)
 
 이 마지막 홉(tgw-rtb의 `/32` 경로)이 **애니캐스트 설계에서 트래픽 방향을 결정하는 핵심 지점**입니다 —
 두 C8000V가 같은 Lo0를 RS에 광고하고(대기 측은 prepend), RS의 best-path가 이 경로의

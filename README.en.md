@@ -113,38 +113,10 @@ standby (priority expressed with AS-path prepend); the tunnel simply
 re-attaches to the standby at the same address. The on-premises CGW **changes
 nothing** — its tunnel destination never moves.
 
-```
-Multicast server 172.20.51.x
-  │ Gi4 (PIM)
-  ▼
-CGW (ASN 65000, Lo0 172.20.255.1 = GRE source + PIM RP)
-  │
-  │ DX Transit VIF ×2 ── underlay BGP 65000↔65300 + BFD, advertises Lo0 only
-  ▼
-DXGW (ASN 65300)
-  │
-  ▼
-TGW (ASN 65400) ── attachment: tgw-sub-az1/2 (dedicated)
-  │                multicast domain (IGMPv2): associated to receiver-sub
-  ▼
-VPC 10.1.1.0/24
-  ├─ [tgw-sub .224/27]
-  │    tgw-rtb: 10.255.255.1/32 → active router Gi1 (injected by Route Server)
-  │
-  ├─ [router-sub .0/26]
-  │    C8000V-1 Gi1 .30 ↔ RS endpoint .29 (no prepend → active)
-  │    C8000V-2 Gi1 .40 ↔ RS endpoint .41 (prepend ×3 → standby)
-  │    Both terminate GRE Tunnel100 (shared anycast Lo0 10.255.255.1, overlay 172.16.100.2)
-  │    Overlay eBGP (65000↔65200) + PIM ↔ CGW; learns LAN 172.20.51.0/24 → re-advertises to RS
-  │    Route Server (ASN 65100) injects/switches the active router's Gi1 ENI route via BGP+BFD
-  │
-  └─ [receiver-sub .64/26]
-       C8000V Gi2 .90/.100 (igmp static-group) → emits into TGW multicast domain
-       Domain replicates to IGMPv2-joined members → Receiver-1 (az1), Receiver-2 (az2)
+![Architecture overview: from the on-premises CGW through Direct Connect, DXGW and TGW, the GRE tunnel terminates on the active C8000V, and the TGW multicast domain replicates to receivers in two AZs](docs/architecture-overview-en.svg)
 
-Data path: server → CGW(RP) → GRE → active C8000V → Gi2 → TGW domain → Receiver ×2
-Failover:  RS detects via BFD → swaps tgw-rtb/receiver-rtb next-hops → re-anchors with CGW unchanged
-```
+- **Data path**: server → CGW (RP) → GRE (over the DX underlay) → active C8000V → Gi2 → TGW domain → Receiver ×2
+- **Failover**: RS detects via BFD → swaps tgw-rtb/receiver-rtb next hops → re-anchors with CGW unchanged
 
 ---
 
@@ -170,14 +142,7 @@ endpoint only needs to reach the other's outer address:
 
 **② Actual path of the GRE-encapsulated packet** (on-prem → AWS):
 
-```
-CGW: encapsulates the original packet in GRE (outer src 172.20.255.1, dst 10.255.255.1)
- → DX Transit VIF → DXGW
- → TGW (static route 10.255.255.1/32 → VPC attachment)
- → arrives at the attachment ENI in tgw-sub
- → tgw-rtb lookup: 10.255.255.1/32 → [active C8000V Gi1 ENI]   ← injected/switched by Route Server
- → active C8000V receives and decapsulates GRE
-```
+![GRE packet path: CGW → Direct Connect → DXGW → TGW (static /32 → VPC attachment) → attachment ENI → tgw-rtb (RS-injected /32 → active C8000V Gi1 ENI) → C8000V-1](docs/gre-packet-path-en.svg)
 
 That final hop (the `/32` route in tgw-rtb) is the **key steering point of the
 anycast design** — both C8000Vs advertise the same Lo0 to the RS (standby with
